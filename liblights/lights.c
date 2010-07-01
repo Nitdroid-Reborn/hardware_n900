@@ -176,12 +176,14 @@ set_light_keyboard(struct light_device_t* dev,
     char file[100];
     int i;
     int err = 0;
-    int on = is_lit(state);
+    int on = is_lit(state) ? 208 : 0;
+	LOGD("%s \n", __func__)
     pthread_mutex_lock(&g_lock);
     for(i = 1; i <= 6; i++) {
         snprintf(file, sizeof(file), KEYBOARD_FILE, i);
-        err = write_int(file, on?255:0);
-        LOGD("%s %d > %s, err=%d\n", __func__, on ? 255:0, file, err);
+        err = write_int(file, on);
+		if (err)
+			LOGE("%s %d > %s, err=%d\n", __func__, on, file, err);
     }
     pthread_mutex_unlock(&g_lock);
     return err;
