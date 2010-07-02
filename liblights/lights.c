@@ -62,6 +62,9 @@ char const*const AMBER_LED_FILE
 char const*const LCD_FILE
         = "/sys/class/backlight/acx565akm/brightness";
 
+char const*const LCD_BLANK_FILE
+        = "/sys/devices/platform/omapfb/graphics:fb0/blank";
+
 char const*const RED_FREQ_FILE
         = "/sys/class/leds/red/device/grpfreq";
 
@@ -98,25 +101,31 @@ void init_globals(void)
 }
 
 static int
-write_int(char const* path, int value)
+write_string(char const *file, const char const *value)
 {
-    int fd;
-    static int already_warned = 0;
+	int fd;
 
-    fd = open(path, O_RDWR);
-    if (fd >= 0) {
-        char buffer[20];
-        int bytes = sprintf(buffer, "%d\n", value);
-        int amt = write(fd, buffer, bytes);
-        close(fd);
-        return amt == -1 ? -errno : 0;
-    } else {
-        if (already_warned == 0) {
-            LOGE("write_int failed to open %s\n", path);
-            already_warned = 1;
-        }
-        return -errno;
-    }
+	fd = open(file, O_RDWR);
+	if (fd >= 0)
+	{
+		char buffer[128];
+		int bytes = snprintf(buffer, sizeof(buffer), "%s\n", value);
+		int amt = write(fd, buffer, bytes);
+		close(fd);
+		return amt == -1 ? -errno : 0;
+	}
+	else {
+		LOGE("%s failed to open %s\n", __func__, file);
+		return -errno;
+	}
+}
+
+static int
+write_int(char const* file, int value)
+{
+	char buffer[20];
+	int bytes = sprintf(buffer, "%d", value);
+	return write_string(file, buffer);
 }
 
 static int
@@ -157,11 +166,26 @@ static int
 set_light_backlight(struct light_device_t* dev,
         struct light_state_t const* state)
 {
+	static int lcdOff = 0;
     int err = 0;
     int brightness = rgb_to_brightness(state);
     pthread_mutex_lock(&g_lock);
     g_backlight = brightness;
     err = write_int(LCD_FILE, brightness);
+
+	if (!brightness) {
+		if (!lcdOff) {
+			err = write_int(LCD_BLANK_FILE, 1);
+			lcdOff = 1;
+		}
+	}
+	else {
+		if (lcdOff) {
+			err = write_int(LCD_BLANK_FILE, 0);
+			lcdOff = 0;
+		}
+	}
+
     if (g_haveTrackballLight) {
         handle_trackball_light_locked(dev);
     }
@@ -177,7 +201,7 @@ set_light_keyboard(struct light_device_t* dev,
     int i;
     int err = 0;
     int on = is_lit(state) ? 208 : 0;
-	LOGD("%s \n", __func__)
+    LOGD("%s %d\n", __func__, on);
     pthread_mutex_lock(&g_lock);
     for(i = 1; i <= 6; i++) {
         snprintf(file, sizeof(file), KEYBOARD_FILE, i);
