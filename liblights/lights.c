@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2010 Nitdroid Project
+ * Author: Alexey Roslyakov <alexey.roslyakov@newsycat.com>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 
 #define LOG_TAG "lights"
 
@@ -35,29 +35,14 @@
 
 static pthread_once_t g_init = PTHREAD_ONCE_INIT;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static int g_haveTrackballLight = 0;
+
 static struct light_state_t g_notification;
 static struct light_state_t g_battery;
 static int g_backlight = 255;
 static int g_trackball = -1;
 static int g_buttons = 0;
 static int g_attention = 0;
-static int g_haveAmberLed = 0;
 
-char const*const TRACKBALL_FILE
-        = "/sys/class/leds/jogball-backlight/brightness";
-
-char const*const RED_LED_FILE
-        = "/sys/class/leds/red/brightness";
-
-char const*const GREEN_LED_FILE
-        = "/sys/class/leds/green/brightness";
-
-char const*const BLUE_LED_FILE
-        = "/sys/class/leds/blue/brightness";
-
-char const*const AMBER_LED_FILE
-        = "/sys/class/leds/amber/brightness";
 
 char const*const LCD_FILE
         = "/sys/class/backlight/acx565akm/brightness";
@@ -65,23 +50,26 @@ char const*const LCD_FILE
 char const*const LCD_BLANK_FILE
         = "/sys/devices/platform/omapfb/graphics:fb0/blank";
 
-char const*const RED_FREQ_FILE
-        = "/sys/class/leds/red/device/grpfreq";
-
-char const*const RED_PWM_FILE
-        = "/sys/class/leds/red/device/grppwm";
-
-char const*const RED_BLINK_FILE
-        = "/sys/class/leds/red/device/blink";
-
-char const*const AMBER_BLINK_FILE
-        = "/sys/class/leds/amber/blink";
-
 char const*const KEYBOARD_FILE
         = "/sys/class/leds/lp5523:kb%d/brightness";
 
-char const*const BUTTON_FILE
-        = "/sys/class/leds/button-backlight/brightness";
+char const*const RED_LED_FILE
+        = "/sys/class/leds/lp5523:r/brightness";
+
+char const*const GREEN_LED_FILE
+        = "/sys/class/leds/lp5523:g/brightness";
+
+char const*const BLUE_LED_FILE
+        = "/sys/class/leds/lp5523:b/brightness";
+
+char const*const ENGINE1_MODE_FILE
+        = "/sys/class/i2c-adapter/i2c-2/2-0032/engine1_mode";
+
+char const*const ENGINE1_LEDS_FILE
+        = "/sys/class/i2c-adapter/i2c-2/2-0032/engine1_leds";
+
+char const*const ENGINE1_LOAD_FILE
+        = "/sys/class/i2c-adapter/i2c-2/2-0032/engine1_load";
 
 /**
  * device methods
@@ -91,13 +79,6 @@ void init_globals(void)
 {
     // init the mutex
     pthread_mutex_init(&g_lock, NULL);
-
-    // figure out if we have the trackball LED or not
-    g_haveTrackballLight = (access(TRACKBALL_FILE, W_OK) == 0) ? 1 : 0;
-
-    /* figure out if we have the amber LED or not.
-       If yes, just support green and amber.         */
-    g_haveAmberLed = (access(AMBER_LED_FILE, W_OK) == 0) ? 1 : 0;
 }
 
 static int
@@ -105,7 +86,7 @@ write_string(char const *file, const char const *value)
 {
 	int fd;
 
-	fd = open(file, O_RDWR);
+	fd = open(file, O_WRONLY);
 	if (fd >= 0)
 	{
 		char buffer[128];
@@ -151,7 +132,8 @@ handle_trackball_light_locked(struct light_device_t* dev)
         return 0;
     }
 
-    return write_int(TRACKBALL_FILE, mode);
+    //return write_int(TRACKBALL_FILE, mode);
+	return 0;
 }
 
 static int
@@ -186,7 +168,7 @@ set_light_backlight(struct light_device_t* dev,
 		}
 	}
 
-    if (g_haveTrackballLight) {
+    if (1) {
         handle_trackball_light_locked(dev);
     }
     pthread_mutex_unlock(&g_lock);
@@ -200,7 +182,7 @@ set_light_keyboard(struct light_device_t* dev,
     char file[100];
     int i;
     int err = 0;
-    int on = is_lit(state) ? 208 : 0;
+	int on = rgb_to_brightness(state);
     LOGD("%s %d\n", __func__, on);
     pthread_mutex_lock(&g_lock);
     for(i = 1; i <= 6; i++) {
@@ -213,28 +195,23 @@ set_light_keyboard(struct light_device_t* dev,
     return err;
 }
 
+/*
+// led
+cd /sys/class/i2c-adapter/i2c-2/2-0032
+echo load > engine1_mode
+echo 000011100 > engine1_leds
+echo 9d804000427f0d7f7f007f0042000000 > engine1_load
+echo run > engine1_mode 
+*/
 static int
-set_light_buttons(struct light_device_t* dev,
-        struct light_state_t const* state)
-{
-    int err = 0;
-    int on = is_lit(state);
-    pthread_mutex_lock(&g_lock);
-    g_buttons = on;
-    err = write_int(BUTTON_FILE, on?255:0);
-    pthread_mutex_unlock(&g_lock);
-    return err;
-}
-
-static int
-set_speaker_light_locked(struct light_device_t* dev,
+set_led_state_locked(struct light_device_t* dev,
         struct light_state_t const* state)
 {
     int len;
     int alpha, red, green, blue;
-    int blink, freq, pwm;
     int onMS, offMS;
     unsigned int colorRGB;
+	char ledsPattern[11], enginePattern[34];
 
     switch (state->flashMode) {
         case LIGHT_FLASH_TIMED:
@@ -250,63 +227,40 @@ set_speaker_light_locked(struct light_device_t* dev,
 
     colorRGB = state->color;
 
-#if 0
+#if 1
     LOGD("set_led_state colorRGB=%08X, onMS=%d, offMS=%d\n",
             colorRGB, onMS, offMS);
 #endif
 
-    red = (colorRGB >> 16) & 0xFF;
-    green = (colorRGB >> 8) & 0xFF;
-    blue = colorRGB & 0xFF;
+	red = (colorRGB >> 16) & 0xFF;
+	green = (colorRGB >> 8) & 0xFF;
+	blue = colorRGB & 0xFF;
 
-    if (!g_haveAmberLed) {
-        write_int(RED_LED_FILE, red);
-        write_int(GREEN_LED_FILE, green);
-        write_int(BLUE_LED_FILE, blue);
+	write_int(RED_LED_FILE, 0);
+	write_int(GREEN_LED_FILE, 0);
+	write_int(BLUE_LED_FILE, 0);
+
+	if (onMS > 0 && offMS > 0) {
+		snprintf(ledsPattern, sizeof(ledsPattern), "0000%d%d%d00\n",
+			blue > 0 ? 1 : 0, green > 0 ? 1 : 0, red > 0 ? 1 : 0);
+		//snprintf(enginePattern, sizeof(enginePattern), "9d8040ff50%02x400050%02x0000\n", onMS/100, offMS/100);
+		snprintf(enginePattern, sizeof(enginePattern), "9d8040ff7f0040007f000000\n");
+
+#if 1
+		LOGD("ledsPattern: %s", ledsPattern);
+		LOGD("enginePattern: %s", enginePattern);
+#endif
+
+		write_string(ENGINE1_MODE_FILE, "load\n");
+		write_string(ENGINE1_LEDS_FILE, ledsPattern);
+		write_string(ENGINE1_LOAD_FILE, enginePattern);
+		write_string(ENGINE1_MODE_FILE, "run\n");
     } else {
-        /* all of related red led is replaced by amber */
-        if (red) {
-            write_int(AMBER_LED_FILE, 1);
-            write_int(GREEN_LED_FILE, 0);
-        } else if (green) {
-            write_int(AMBER_LED_FILE, 0);
-            write_int(GREEN_LED_FILE, 1);
-        } else {
-            write_int(GREEN_LED_FILE, 0);
-            write_int(AMBER_LED_FILE, 0);
-        }
-    }
+		write_string(ENGINE1_MODE_FILE, "disabled\n");
+		write_int(RED_LED_FILE, red);
+		write_int(GREEN_LED_FILE, green);
+		write_int(BLUE_LED_FILE, blue);
 
-    if (onMS > 0 && offMS > 0) {
-        int totalMS = onMS + offMS;
-
-        // the LED appears to blink about once per second if freq is 20
-        // 1000ms / 20 = 50
-        freq = totalMS / 50;
-        // pwm specifies the ratio of ON versus OFF
-        // pwm = 0 -> always off
-        // pwm = 255 => always on
-        pwm = (onMS * 255) / totalMS;
-
-        // the low 4 bits are ignored, so round up if necessary
-        if (pwm > 0 && pwm < 16)
-            pwm = 16;
-
-        blink = 1;
-    } else {
-        blink = 0;
-        freq = 0;
-        pwm = 0;
-    }
-
-    if (!g_haveAmberLed) {
-        if (blink) {
-            write_int(RED_FREQ_FILE, freq);
-            write_int(RED_PWM_FILE, pwm);
-        }
-        write_int(RED_BLINK_FILE, blink);
-    } else {
-        write_int(AMBER_BLINK_FILE, blink);
     }
 
     return 0;
@@ -316,9 +270,9 @@ static void
 handle_speaker_battery_locked(struct light_device_t* dev)
 {
     if (is_lit(&g_battery)) {
-        set_speaker_light_locked(dev, &g_battery);
+        set_led_state_locked(dev, &g_battery);
     } else {
-        set_speaker_light_locked(dev, &g_notification);
+        set_led_state_locked(dev, &g_notification);
     }
 }
 
@@ -328,8 +282,9 @@ set_light_battery(struct light_device_t* dev,
 {
     pthread_mutex_lock(&g_lock);
     g_battery = *state;
-    if (g_haveTrackballLight) {
-        set_speaker_light_locked(dev, state);
+	LOGD("set_light_battery color=0x%08x", state->color);
+    if (1) {
+        set_led_state_locked(dev, state);
     }
     handle_speaker_battery_locked(dev);
     pthread_mutex_unlock(&g_lock);
@@ -342,9 +297,8 @@ set_light_notifications(struct light_device_t* dev,
 {
     pthread_mutex_lock(&g_lock);
     g_notification = *state;
-    LOGV("set_light_notifications g_trackball=%d color=0x%08x",
-            g_trackball, state->color);
-    if (g_haveTrackballLight) {
+    LOGD("set_light_notifications color=0x%08x", state->color);
+    if (1) {
         handle_trackball_light_locked(dev);
     }
     handle_speaker_battery_locked(dev);
@@ -358,14 +312,13 @@ set_light_attention(struct light_device_t* dev,
 {
     pthread_mutex_lock(&g_lock);
     g_notification = *state;
-    LOGV("set_light_attention g_trackball=%d color=0x%08x",
-            g_trackball, state->color);
+    LOGD("set_light_attention color=0x%08x", state->color);
     if (state->flashMode == LIGHT_FLASH_HARDWARE) {
         g_attention = state->flashOnMS;
     } else if (state->flashMode == LIGHT_FLASH_NONE) {
         g_attention = 0;
     }
-    if (g_haveTrackballLight) {
+    if (1) {
         handle_trackball_light_locked(dev);
     }
     pthread_mutex_unlock(&g_lock);
@@ -402,10 +355,12 @@ static int open_lights(const struct hw_module_t* module, char const* name,
     else if (0 == strcmp(LIGHT_ID_KEYBOARD, name)) {
         set_light = set_light_keyboard;
     }
+#if 1
+	// this is not needed since we got keyboard slide support
     else if (0 == strcmp(LIGHT_ID_BUTTONS, name)) {
         set_light = set_light_keyboard;
-        //set_light = set_light_buttons;
     }
+#endif
     else if (0 == strcmp(LIGHT_ID_BATTERY, name)) {
         set_light = set_light_battery;
     }
@@ -430,7 +385,6 @@ static int open_lights(const struct hw_module_t* module, char const* name,
     dev->common.close = (int (*)(struct hw_device_t*))close_lights;
     dev->set_light = set_light;
 
-    //LOGD("name=%s, dev=%p", name, dev);
     *device = (struct hw_device_t*)dev;
     return 0;
 }
