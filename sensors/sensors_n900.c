@@ -35,8 +35,8 @@
 #include <sys/poll.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
-#include <linux/input.h>
 #include <sys/select.h>
+#include <linux/netlink.h>
 
 #include <hardware/sensors.h>
 #include <cutils/native_handle.h>
@@ -65,8 +65,7 @@
 #define CONTROL_WRITE 1
 #define WAKE_SOURCE 0x1a
 
-static const char sysfs_path[] = "/sys/class/i2c-adapter/i2c-3/3-001d";
-static const char coord_filename[] = "/sys/class/i2c-adapter/i2c-3/3-001d/coord";
+#define SYSFS_PATH "/sys/class/i2c-adapter/i2c-3/3-001d/"
 
 uint32_t active_sensors;
 int sensor_fd = -1;
@@ -82,7 +81,7 @@ write_string(char const *file, const char const *value)
 	char path[256];
     static int already_warned = 0;
 
-	snprintf(path, sizeof(path), "%s/%s", sysfs_path, file);
+	snprintf(path, sizeof(path), SYSFS_PATH "%s", file);
 
     fd = open(path, O_RDWR);
     if (fd >= 0)
@@ -141,7 +140,7 @@ static uint32_t sensors_get_list(struct sensors_module_t *module,
 static int
 close_sensors(struct hw_device_t *dev)
 {
-#if 0
+#if 1
     struct sensors_data_device_t *device_data =
                     (struct sensors_data_device_t *)dev;
     if (device_data) {
@@ -154,50 +153,32 @@ close_sensors(struct hw_device_t *dev)
 }
 
 #if 0
-int open_sensors_phy(struct sensors_control_device_t *dev)
+int open_uevent()
 {
-    char devname[PATH_MAX];
-    char *filename;
-    int fd;
-    int res;
-    uint8_t bits[4];
-    DIR *dir;
-    struct dirent *de;
+    struct sockaddr_nl addr;
+    int sz = 64*1024;
+    int s;
 
-    dir = opendir(INPUT_DIR);
-    if (dir == NULL)
+    memset(&addr, 0, sizeof(addr));
+    addr.nl_family = AF_NETLINK;
+    addr.nl_pid = getpid();
+    addr.nl_groups = 0xffffffff;
+
+    s = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_KOBJECT_UEVENT);
+    if(s < 0) {
+		LOGE("%s socket failed", __func__);
         return -1;
+	}
 
-    strcpy(devname, INPUT_DIR);
-    filename = devname + strlen(devname);
-    *filename++ = '/';
+    setsockopt(s, SOL_SOCKET, SO_RCVBUFFORCE, &sz, sizeof(sz));
 
-    while ((de = readdir(dir)))
-    {
-        if (de->d_name[0] == '.' &&
-                (de->d_name[1] == '\0' ||
-                 (de->d_name[1] == '.' && de->d_name[2] == '\0')))
-            continue;
-        strcpy(filename, de->d_name);
-        fd = open(devname, O_RDONLY);
-        if (fd < 0)
-        {
-            LOGE("Couldn't open %s, error = %d", devname, fd);
-            continue;
-        }
-        res = ioctl(fd, EVIOCGBIT(EV_ABS, 4), bits);
-        if (res <= 0 || bits[0] != EVENT_MASK_ACCEL_ALL)
-        {
-            close(fd);
-            continue;
-        }
-
-        closedir(dir);
-        return fd;
+    if(bind(s, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+		LOGE("%s bind failed", __func__);
+        close(s);
+        return -1;
     }
-    closedir(dir);
 
-    return -1;
+    return s;
 }
 #endif
 
@@ -210,6 +191,7 @@ static native_handle_t *control_open_data_source(struct sensors_control_device_t
         LOGE("Sensor open and not yet closed\n");
         return NULL;
     }
+#endif
 
     if (control_fd[0] == -1 && control_fd[1] == -1) {
         if (socketpair(AF_LOCAL, SOCK_STREAM, 0, control_fd) < 0 )
@@ -220,13 +202,17 @@ static native_handle_t *control_open_data_source(struct sensors_control_device_t
         }
     }
 
-    sensor_fd = open_sensors_phy(dev);
-
+#if 0
+    sensor_fd = open_uevent();
+	if (sensor_fd < 0) {
+		LOGE("%s open_uevent failed: %d", __func__, errno);
+		return 0;
+	}
 #endif
 
-    LOGD("Open sensor\n");
+    LOGD("%s sensor_fd=%d\n", __func__, sensor_fd);
     hd = native_handle_create(1, 0);
-    hd->data[0] = 1;
+    hd->data[0] = sensor_fd;
 
     return hd;
 }
@@ -284,11 +270,8 @@ int sensors_open(struct sensors_data_device_t *dev, native_handle_t* hd)
 {
     event_fd = dup(hd->data[0]);
     sensors.vector.status = SENSOR_STATUS_ACCURACY_HIGH;
-    LOGD("Open sensor\n");
-    write_int("/sys/bus/spi/drivers/lis302dl/spi3.1/threshold",
-              DEFAULT_THRESHOLD);
-    write_int("/sys/bus/spi/drivers/lis302dl/spi3.0/threshold",
-              DEFAULT_THRESHOLD);
+    LOGD("%s\n", __func__);
+    write_int(SYSFS_PATH "threshold", DEFAULT_THRESHOLD);
     native_handle_close(hd);
     native_handle_delete(hd);
 
@@ -300,7 +283,7 @@ int sensors_close(struct sensors_data_device_t *dev)
     if (event_fd > 0) {
         close(event_fd);
         event_fd = -1;
-        LOGD("Close sensor\n");
+        LOGD("%s\n", __func__);
     }
     return 0;
 }
@@ -312,35 +295,48 @@ int sensors_poll(struct sensors_data_device_t *dev, sensors_data_t* values)
     int ret;
     uint32_t new_sensors = 0;
     int fd, select_dim;
+	struct timeval timeout;
 
-    fd = open(coord_filename, O_RDONLY | O_NONBLOCK);
+    fd = open(SYSFS_PATH "coord", O_RDONLY/* | O_NONBLOCK*/);
+	//LOGD("sensors_poll fd=%d", fd);
 	if (fd < 1) {
-		LOGE("failed open coord file: %d", fd);
+		LOGE("failed open coord file: %d", errno);
 		return -1;
 	}
+
+#if 0
     select_dim = (fd > control_fd[CONTROL_READ]) ?
                  fd + 1 : control_fd[CONTROL_READ] + 1;
+#else
+	select_dim = control_fd[CONTROL_READ] + 1;
+#endif
 
     while (1)
     {
         FD_ZERO(&rfds);
-        FD_SET(fd, &rfds);
+        //FD_SET(fd, &rfds);
         FD_SET(control_fd[CONTROL_READ], &rfds);
 
         do {
-            ret = select(select_dim, &rfds, NULL, NULL, 0);
+			timeout.tv_sec = 0;
+			timeout.tv_usec = 100000;
+            ret = select(select_dim, &rfds, NULL, NULL, &timeout);
         } while (ret < 0 && errno == EINTR);
 
-#if 0
+		if (ret < 0) {
+			LOGE("%s select error: %d", __func__, errno);
+			return ret;
+		}
+
         if (FD_ISSET(control_fd[CONTROL_READ], &rfds))
         {
             char ch;
             read(control_fd[CONTROL_READ], &ch, sizeof(ch));
-            //LOGD("Wake up by the control system\n");
+            LOGD("Wake up by the control system\n");
 			close(fd);
             return -EWOULDBLOCK;
         }
-#endif
+
         ret = read(fd, coord, sizeof(coord));
 		close(fd);
         if (ret < 0)
@@ -355,8 +351,8 @@ int sensors_poll(struct sensors_data_device_t *dev, sensors_data_t* values)
         sensors.acceleration.z = (-GRAVITY_EARTH * z) / 1000;
         int64_t t = 0 * SEC_TO_NSEC + 10 *
                         USEC_TO_NSEC;
-        sensors.time = 0; //t
-#if 0
+        sensors.time = 0; //200000;
+#if 1
         LOGD("%s: sensor event %f, %f, %f\n", __FUNCTION__,
              sensors.acceleration.x, sensors.acceleration.y,
              sensors.acceleration.z);
