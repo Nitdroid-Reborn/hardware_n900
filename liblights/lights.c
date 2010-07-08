@@ -90,7 +90,7 @@ write_string(char const *file, const char const *value)
 	if (fd >= 0)
 	{
 		char buffer[128];
-		int bytes = snprintf(buffer, sizeof(buffer), "%s\n", value);
+		int bytes = snprintf(buffer, sizeof(buffer), "%s", value);
 		int amt = write(fd, buffer, bytes);
 		close(fd);
 		return amt == -1 ? -errno : 0;
@@ -105,7 +105,7 @@ static int
 write_int(char const* file, int value)
 {
 	char buffer[20];
-	int bytes = sprintf(buffer, "%d", value);
+	int bytes = sprintf(buffer, "%d\n", value);
 	return write_string(file, buffer);
 }
 
@@ -211,7 +211,7 @@ set_led_state_locked(struct light_device_t* dev,
     int alpha, red, green, blue;
     int onMS, offMS;
     unsigned int colorRGB;
-	char ledsPattern[11], enginePattern[34];
+	char ledsPattern[12], enginePattern[35];
 
     switch (state->flashMode) {
         case LIGHT_FLASH_TIMED:
@@ -236,15 +236,15 @@ set_led_state_locked(struct light_device_t* dev,
 	green = (colorRGB >> 8) & 0xFF;
 	blue = colorRGB & 0xFF;
 
-	write_int(RED_LED_FILE, 0);
-	write_int(GREEN_LED_FILE, 0);
-	write_int(BLUE_LED_FILE, 0);
-
 	if (onMS > 0 && offMS > 0) {
+		write_int(RED_LED_FILE, 0);
+		write_int(GREEN_LED_FILE, 0);
+		write_int(BLUE_LED_FILE, 0);
+
 		snprintf(ledsPattern, sizeof(ledsPattern), "0000%d%d%d00\n",
 			blue > 0 ? 1 : 0, green > 0 ? 1 : 0, red > 0 ? 1 : 0);
-		//snprintf(enginePattern, sizeof(enginePattern), "9d8040ff50%02x400050%02x0000\n", onMS/100, offMS/100);
-		snprintf(enginePattern, sizeof(enginePattern), "9d8040ff7f0040007f000000\n");
+		snprintf(enginePattern, sizeof(enginePattern), "9d8040ff%02x004000%02x000000\n", 0x42+onMS/67, 0x42+offMS/67);
+		//snprintf(enginePattern, sizeof(enginePattern), "9d8040ff7f0040007f000000\n");
 
 #if 1
 		LOGD("ledsPattern: %s", ledsPattern);
@@ -260,7 +260,6 @@ set_led_state_locked(struct light_device_t* dev,
 		write_int(RED_LED_FILE, red);
 		write_int(GREEN_LED_FILE, green);
 		write_int(BLUE_LED_FILE, blue);
-
     }
 
     return 0;
@@ -283,7 +282,7 @@ set_light_battery(struct light_device_t* dev,
     pthread_mutex_lock(&g_lock);
     g_battery = *state;
 	LOGD("set_light_battery color=0x%08x", state->color);
-    if (1) {
+    if (0) {
         set_led_state_locked(dev, state);
     }
     handle_speaker_battery_locked(dev);
