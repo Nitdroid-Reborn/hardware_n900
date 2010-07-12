@@ -36,10 +36,13 @@
 static pthread_once_t g_init = PTHREAD_ONCE_INIT;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static struct light_state_t g_notification;
-static struct light_state_t g_battery;
+static struct light_state_t g_notification = {
+	.color = 0,
+};
+static struct light_state_t g_battery = {
+	.color = 0,
+};
 static int g_backlight = 255;
-static int g_trackball = -1;
 static int g_buttons = 0;
 static int g_attention = 0;
 
@@ -116,27 +119,6 @@ is_lit(struct light_state_t const* state)
 }
 
 static int
-handle_trackball_light_locked(struct light_device_t* dev)
-{
-    int mode = g_attention;
-
-    if (mode == 7 && g_backlight) {
-        mode = 0;
-    }
-    LOGV("%s g_backlight = %d, mode = %d, g_attention = %d\n",
-        __func__, g_backlight, mode, g_attention);
-
-    // If the value isn't changing, don't set it, because this
-    // can reset the timer on the breathing mode, which looks bad.
-    if (g_trackball == mode) {
-        return 0;
-    }
-
-    //return write_int(TRACKBALL_FILE, mode);
-	return 0;
-}
-
-static int
 rgb_to_brightness(struct light_state_t const* state)
 {
     int color = state->color & 0x00ffffff;
@@ -168,9 +150,6 @@ set_light_backlight(struct light_device_t* dev,
 		}
 	}
 
-    if (1) {
-        handle_trackball_light_locked(dev);
-    }
     pthread_mutex_unlock(&g_lock);
     return err;
 }
@@ -297,9 +276,6 @@ set_light_notifications(struct light_device_t* dev,
     pthread_mutex_lock(&g_lock);
     g_notification = *state;
     LOGD("set_light_notifications color=0x%08x", state->color);
-    if (1) {
-        handle_trackball_light_locked(dev);
-    }
     handle_speaker_battery_locked(dev);
     pthread_mutex_unlock(&g_lock);
     return 0;
@@ -316,9 +292,6 @@ set_light_attention(struct light_device_t* dev,
         g_attention = state->flashOnMS;
     } else if (state->flashMode == LIGHT_FLASH_NONE) {
         g_attention = 0;
-    }
-    if (1) {
-        handle_trackball_light_locked(dev);
     }
     pthread_mutex_unlock(&g_lock);
     return 0;
