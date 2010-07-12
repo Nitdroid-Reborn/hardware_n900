@@ -48,7 +48,7 @@ char const*const LCD_FILE
         = "/sys/class/backlight/acx565akm/brightness";
 
 char const*const LCD_BLANK_FILE
-        = "/sys/devices/platform/omapfb/graphics:fb0/blank";
+        = "/sys/devices/platform/omapfb/graphics/fb0/blank";
 
 char const*const KEYBOARD_FILE
         = "/sys/class/leds/lp5523:kb%d/brightness";
