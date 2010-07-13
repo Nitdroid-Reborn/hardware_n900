@@ -261,9 +261,6 @@ set_light_battery(struct light_device_t* dev,
     pthread_mutex_lock(&g_lock);
     g_battery = *state;
 	LOGD("set_light_battery color=0x%08x", state->color);
-    if (0) {
-        set_led_state_locked(dev, state);
-    }
     handle_speaker_battery_locked(dev);
     pthread_mutex_unlock(&g_lock);
     return 0;
@@ -285,6 +282,7 @@ static int
 set_light_attention(struct light_device_t* dev,
         struct light_state_t const* state)
 {
+#if 0
     pthread_mutex_lock(&g_lock);
     g_notification = *state;
     LOGD("set_light_attention color=0x%08x", state->color);
@@ -293,7 +291,9 @@ set_light_attention(struct light_device_t* dev,
     } else if (state->flashMode == LIGHT_FLASH_NONE) {
         g_attention = 0;
     }
+	handle_speaker_battery_locked(dev);
     pthread_mutex_unlock(&g_lock);
+#endif
     return 0;
 }
 
