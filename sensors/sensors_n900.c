@@ -289,7 +289,7 @@ int sensors_poll(struct sensors_data_device_t *dev, sensors_data_t* values)
 
 		do {
 			timeout.tv_sec = 0;
-			timeout.tv_usec = 400000;
+			timeout.tv_usec = 200000;
 			ret = select(select_dim, &rfds, NULL, NULL, &timeout);
 		} while (ret < 0 && errno == EINTR);
 
