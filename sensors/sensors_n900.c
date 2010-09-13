@@ -38,7 +38,6 @@
 #include <sys/select.h>
 #include <linux/netlink.h>
 
-
 #include <hardware/sensors.h>
 #include <cutils/native_handle.h>
 #include <cutils/sockets.h>
@@ -48,18 +47,9 @@
 #define ID_BASE SENSORS_HANDLE_BASE
 #define ID_ACCELERATION (ID_BASE+0)
 
-#define LSG                     (980.0f)
-#define CONVERT                 (GRAVITY_EARTH / LSG)
-#define SENSORS_ACCELERATION    (1 << ID_ACCELERATION)
-#define SUPPORTED_SENSORS       (SENSORS_ACCELERATION)
 #define EVENT_MASK_ACCEL_ALL    ( (1 << ABS_X) | (1 << ABS_Y) | (1 << ABS_Z))
 #define DEFAULT_THRESHOLD 100
 
-#define ACCELERATION_X (1 << ABS_X)
-#define ACCELERATION_Y (1 << ABS_Y)
-#define ACCELERATION_Z (1 << ABS_Z)
-#define SENSORS_ACCELERATION_ALL (ACCELERATION_X | ACCELERATION_Y | \
-        ACCELERATION_Z)
 #define SEC_TO_NSEC 1000000000LL
 #define USEC_TO_NSEC 1000
 #define CONTROL_READ 0
@@ -79,9 +69,12 @@ static int
 write_string(char const *file, const char const *value)
 {
     int fd;
+	char path[256];
     static int already_warned = 0;
 
-    fd = open(file, O_WRONLY);
+	snprintf(path, sizeof(path), SYSFS_PATH "%s", file);
+
+    fd = open(path, O_RDWR);
     if (fd >= 0)
     {
         char buffer[200];
@@ -94,7 +87,7 @@ write_string(char const *file, const char const *value)
     {
         if (already_warned == 0)
         {
-            LOGE("write_string failed to open %s\n", file);
+            LOGE("write_int failed to open %s\n", path);
             already_warned = 1;
         }
         return -errno;
@@ -127,8 +120,8 @@ static const struct sensor_t sensors_list[] =
 	},
 };
 
-static uint32_t sensors_get_list(struct sensors_module_t *module,
-                                 struct sensor_t const** list)
+static int sensors_get_list(struct sensors_module_t *module,
+                            struct sensor_t const** list)
 {
     *list = sensors_list;
     return 1;
@@ -152,8 +145,14 @@ close_sensors(struct hw_device_t *dev)
 
 static native_handle_t *control_open_data_source(struct sensors_control_device_t *dev)
 {
-	int flags;
     native_handle_t *hd;
+
+#if 0
+    if (event_fd != -1) {
+        LOGE("Sensor open and not yet closed\n");
+        return NULL;
+    }
+#endif
 
     if (control_fd[0] == -1 && control_fd[1] == -1) {
         if (socketpair(AF_LOCAL, SOCK_STREAM, 0, control_fd) < 0 )
@@ -164,25 +163,9 @@ static native_handle_t *control_open_data_source(struct sensors_control_device_t
         }
     }
 
-	char coord[20];
-	int fd = open(SYSFS_PATH "coord", O_RDONLY);
-	read(fd, coord, sizeof(coord));
-	LOGD("%s fd=%d, %s", __func__, fd, coord);
-	if (fd < 1) {
-		LOGE("failed open coord file: %d", errno);
-		return 0;
-	}
-
-	/* set non-blocking mode for sysfs-file. we need this for polling */
-	if (-1 == (flags = fcntl(fd, F_GETFL, 0)))
-        flags = 0;
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-
-
-    LOGD("%s fd=%d\n", __func__, fd);
+    LOGD("%s sensor_fd=%d\n", __func__, sensor_fd);
     hd = native_handle_create(1, 0);
-    hd->data[0] = fd;
-	sensor_fd = fd;
+    hd->data[0] = control_fd[0];
 
     return hd;
 }
@@ -208,16 +191,12 @@ static int control_activate(struct sensors_control_device_t *dev,
     else
         LOGD("Activate sensor\n");
 
-	write_string(SYSFS_PATH "enable", enabled ? "on" : "off");
-
     return 0;
 }
 
 static int control_set_delay(struct sensors_control_device_t *dev, int32_t ms)
 {
-    LOGD("Control set delay %d ms is not supported and fix to 100\n", ms);
-	write_string(SYSFS_PATH "duration", "100");
-	write_string(SYSFS_PATH "scale", "full");
+    LOGD("Control set delay %d ms is not supported and fix to 400\n", ms);
     return 0;
 }
 
@@ -240,19 +219,24 @@ static int control_close(struct hw_device_t *dev)
     return 0;
 }
 
-int sensors_open(struct sensors_data_device_t *dev, native_handle_t* hd)
+static int sensors_open(struct sensors_data_device_t *dev, native_handle_t* hd)
 {
-    event_fd = dup(hd->data[0]);
+    event_fd = open(SYSFS_PATH "coord", O_RDONLY | O_NONBLOCK);
+    if (event_fd < 0) {
+        LOGE("coord open failed in %s: %s", __FUNCTION__, strerror(errno));
+        return -1;
+    }
+
     sensors.vector.status = SENSOR_STATUS_ACCURACY_HIGH;
     LOGD("%s\n", __func__);
-    write_int(SYSFS_PATH "threshold", DEFAULT_THRESHOLD);
+    write_int("threshold", DEFAULT_THRESHOLD);
     native_handle_close(hd);
     native_handle_delete(hd);
 
     return 0;
 }
 
-int sensors_close(struct sensors_data_device_t *dev)
+static int sensors_close(struct sensors_data_device_t *dev)
 {
     if (event_fd > 0) {
         close(event_fd);
@@ -262,7 +246,7 @@ int sensors_close(struct sensors_data_device_t *dev)
     return 0;
 }
 
-int sensors_poll(struct sensors_data_device_t *dev, sensors_data_t* values)
+static int sensors_poll(struct sensors_data_device_t *dev, sensors_data_t* values)
 {
     fd_set rfds;
     char coord[20];
@@ -271,65 +255,67 @@ int sensors_poll(struct sensors_data_device_t *dev, sensors_data_t* values)
     int fd, select_dim;
 	struct timeval timeout;
 
-	fd = event_fd;
+    fd = event_fd;
+	if (fd < 1) {
+		LOGE("Bad coord file descriptor: %d", fd);
+		return -1;
+	}
 
-#if 1
+#if 0
     select_dim = (fd > control_fd[CONTROL_READ]) ?
                  fd + 1 : control_fd[CONTROL_READ] + 1;
 #else
-	select_dim = control_fd[CONTROL_READ] + 1;
+	select_dim = fd + 1;
 #endif
 
     while (1)
     {
-		FD_ZERO(&rfds);
-		FD_SET(fd, &rfds);
-		FD_SET(control_fd[CONTROL_READ], &rfds);
-		//lseek(fd, 0, SEEK_SET);
+        FD_ZERO(&rfds);
+        FD_SET(fd, &rfds);
+        //FD_SET(control_fd[CONTROL_READ], &rfds);
 
-		do {
+        do {
 			timeout.tv_sec = 0;
-			timeout.tv_usec = 200000;
-			ret = select(select_dim, &rfds, NULL, NULL, &timeout);
-		} while (ret < 0 && errno == EINTR);
+			timeout.tv_usec = 100000;
+            ret = select(select_dim, &rfds, NULL, NULL, &timeout);
+        } while (ret < 0 && errno == EINTR);
 
 		if (ret < 0) {
-			LOGE("%s select error: %s", __func__, strerror(errno));
+			LOGE("%s select error: %d", __func__, errno);
 			return ret;
 		}
 
-		if (FD_ISSET(control_fd[CONTROL_READ], &rfds)) {
-			char ch;
-			read(control_fd[CONTROL_READ], &ch, sizeof(ch));
-			LOGD("Wake up by the control system\n");
-			return -EWOULDBLOCK;
-		}
+#if 0
+        if (FD_ISSET(control_fd[CONTROL_READ], &rfds))
+        {
+            char ch;
+            read(control_fd[CONTROL_READ], &ch, sizeof(ch));
+            LOGD("Wake up by the control system\n");
+            return -EWOULDBLOCK;
+        }
+#endif
 
-		FD_CLR(control_fd[CONTROL_READ], &rfds);
+        lseek(fd, 0, SEEK_SET);
+        ret = read(fd, coord, sizeof(coord));
+        if (ret < 0)
+            break;
 
-		lseek(fd, 0, SEEK_SET);
-		ret = read(fd, coord, sizeof(coord));
-		if (ret < 0) {
-			LOGE("%s read error: %s", __func__, strerror(errno));
-			break;
-		}
-		//write_string(SYSFS_PATH "enable", "on");
+        FD_CLR(control_fd[CONTROL_READ], &rfds);
 
 		float x = 0, y = 0, z = 0;
 		sscanf(coord, "%f %f %f\n", &x, &y, &z);
-		sensors.acceleration.x = (GRAVITY_EARTH * x) / 1000;
-		sensors.acceleration.y = (-GRAVITY_EARTH * y) / 1000;
-		sensors.acceleration.z = (-GRAVITY_EARTH * z) / 1000;
-		int64_t t = 0 * SEC_TO_NSEC + 10 * USEC_TO_NSEC;
-		sensors.time = 0; //200000;
-#if 1
-		LOGD("%s: sensor event %f, %f, %f\n", __FUNCTION__,
-			sensors.acceleration.x, sensors.acceleration.y,
-			sensors.acceleration.z);
+        sensors.acceleration.x = (GRAVITY_EARTH * x) / 1000;
+        sensors.acceleration.y = (-GRAVITY_EARTH * y) / 1000;
+        sensors.acceleration.z = (-GRAVITY_EARTH * z) / 1000;
+        sensors.time = 0;
+#if 0
+        LOGD("%s: sensor event %f, %f, %f\n", __FUNCTION__,
+             sensors.acceleration.x, sensors.acceleration.y,
+             sensors.acceleration.z);
 #endif
-		*values = sensors;
-		values->sensor = ID_ACCELERATION;
-		return ID_ACCELERATION;
+        *values = sensors;
+        values->sensor = ID_ACCELERATION;
+        return ID_ACCELERATION;
     }
     return 0;
 }
