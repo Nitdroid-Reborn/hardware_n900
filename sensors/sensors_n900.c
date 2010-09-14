@@ -74,7 +74,7 @@ write_string(char const *file, const char const *value)
 
 	snprintf(path, sizeof(path), SYSFS_PATH "%s", file);
 
-    fd = open(path, O_RDWR);
+    fd = open(path, O_WRONLY);
     if (fd >= 0)
     {
         char buffer[200];
@@ -229,7 +229,7 @@ static int sensors_open(struct sensors_data_device_t *dev, native_handle_t* hd)
 
     sensors.vector.status = SENSOR_STATUS_ACCURACY_HIGH;
     LOGD("%s\n", __func__);
-    write_int("threshold", DEFAULT_THRESHOLD);
+    write_int("ths", DEFAULT_THRESHOLD);
     native_handle_close(hd);
     native_handle_delete(hd);
 
