@@ -304,8 +304,8 @@ static int sensors_poll(struct sensors_data_device_t *dev, sensors_data_t* value
 
 		float x = 0, y = 0, z = 0;
 		sscanf(coord, "%f %f %f\n", &x, &y, &z);
-        sensors.acceleration.x = (GRAVITY_EARTH * x) / 1000;
-        sensors.acceleration.y = (-GRAVITY_EARTH * y) / 1000;
+        sensors.acceleration.x = (-GRAVITY_EARTH * y) / 1000;
+        sensors.acceleration.y = (-GRAVITY_EARTH * x) / 1000;
         sensors.acceleration.z = (-GRAVITY_EARTH * z) / 1000;
         sensors.time = 0;
 #if 0
