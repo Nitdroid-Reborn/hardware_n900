@@ -247,7 +247,7 @@ set_led_state_locked(struct light_device_t* dev,
 static void
 handle_speaker_battery_locked(struct light_device_t* dev)
 {
-    if (is_lit(&g_battery)) {
+    if (is_lit(&g_battery) && LIGHT_FLASH_TIMED == g_battery.flashMode) {
         set_led_state_locked(dev, &g_battery);
     } else {
         set_led_state_locked(dev, &g_notification);
@@ -327,7 +327,7 @@ static int open_lights(const struct hw_module_t* module, char const* name,
     else if (0 == strcmp(LIGHT_ID_KEYBOARD, name)) {
         set_light = set_light_keyboard;
     }
-#if 1
+#if 0
 	// this is not needed since we got keyboard slide support
     else if (0 == strcmp(LIGHT_ID_BUTTONS, name)) {
         set_light = set_light_keyboard;
