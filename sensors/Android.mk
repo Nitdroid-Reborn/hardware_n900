@@ -27,4 +27,5 @@ LOCAL_SHARED_LIBRARIES := liblog \
 		libcutils
 LOCAL_SRC_FILES := sensors_n900.c
 LOCAL_MODULE := sensors.$(PRODUCT_BRAND)
+LOCAL_MODULE_TAGS := optional
 include $(BUILD_SHARED_LIBRARY)
