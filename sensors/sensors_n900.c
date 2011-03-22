@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 The Android Open Source Project
- * Copyright (C) 2010 Nitdroid Project
+ * Copyright (C) 2010, 2011 Nitdroid Project
  *
  * Author: Alexey Roslyakov <alexey.roslyakov@newsycat.com>
  *
@@ -52,7 +52,13 @@
 #define DEFAULT_THRESHOLD 100
 #define SYSFS_PATH "/sys/class/i2c-adapter/i2c-3/3-001d/"
 
+static const char agr_trs_propname[] = "hw.n900.sensor.agressive_trs";
+
 static int sensor_fd = -1;
+static int agressive = 0;
+static int agressive_trs = 200000000;
+
+/******************************************************************************/
 
 static int
 write_string(char const *file, const char const *value)
@@ -118,7 +124,9 @@ static int sensors_get_list(struct sensors_module_t *module,
 
 static int sensors_set_delay_n900(struct sensors_poll_device_t *dev, int handle, int64_t ns)
 {
-    LOGD("Control set delay %lld ns is not supported and fix to 200 ms\n", ns);
+    agressive = ns < agressive_trs ? 1 : 0;
+    LOGD("Control set delay: %lld ns, agressive mode: %d\n", ns, agressive);
+
     return 0;
 }
 
@@ -148,7 +156,7 @@ static int sensors_activate_n900(struct sensors_poll_device_t *dev, int handle, 
     }
 
     LOGD("%s\n", __func__);
-    write_int("ths", DEFAULT_THRESHOLD);
+    write_int(SYSFS_PATH "ths", DEFAULT_THRESHOLD);
 
     return 0;
 }
@@ -196,6 +204,17 @@ static int sensors_poll_n900(struct sensors_poll_device_t *dev, sensors_event_t*
     event->version = sizeof(struct sensors_event_t);
     event->type = ID_ACCELERATION;
 
+    if (agressive && sensor_fd != -1) {
+        int old_fd = sensor_fd;
+        sensor_fd = open(SYSFS_PATH "coord", O_RDONLY | O_NONBLOCK);
+        if (sensor_fd < 0) {
+            LOGE("%s: coord reopen failed: %s", __FUNCTION__, strerror(errno));
+            sensor_fd = old_fd;
+        }
+        else
+            close(old_fd);
+    }
+
 #if (SENSORS_N900_DEBUG > 0)
     LOGD("%s: sensor event %f, %f, %f\n", __FUNCTION__,
          event->acceleration.x, event->acceleration.y,
@@ -217,6 +236,16 @@ static int open_sensors(const struct hw_module_t* module, char const* name,
 {
     int status = -EINVAL;
 
+    char propValue[PROPERTY_VALUE_MAX];
+    if (property_get(agr_trs_propname, propValue, NULL)) {
+        int r = 0;
+        sscanf(propValue, "%d", &r);
+        if (r > 0) {
+            agressive_trs = r;
+            LOGW("agressive_trs=%d", agressive_trs);
+        }
+    }
+
     if (!strcmp(name, SENSORS_HARDWARE_POLL)) {
         struct sensors_poll_device_t *dev =
             malloc(sizeof(*dev));
@@ -232,7 +261,6 @@ static int open_sensors(const struct hw_module_t* module, char const* name,
         
         *device = &dev->common;
         status = 0;
-        fprintf(stderr, "!");
     }
     return status;
 }
@@ -250,7 +278,7 @@ struct sensors_module_t HAL_MODULE_INFO_SYM =
     .common = {
         .tag           = HARDWARE_MODULE_TAG,
         .version_major = 2,
-        .version_minor = 0,
+        .version_minor = 1,
         .id            = SENSORS_HARDWARE_MODULE_ID,
         .name          = "N900 sensors module",
         .author        = "Alexey Roslyakov<alexey.roslyakov@newsycat.com>",
